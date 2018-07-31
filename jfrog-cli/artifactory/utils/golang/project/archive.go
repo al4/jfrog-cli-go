@@ -9,7 +9,38 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"bytes"
 )
+
+type FileLike interface {
+	Name() string
+	Stat() (os.FileInfo, error)
+	Read([]byte) (int, error)
+	Close() error
+}
+
+type SymLink struct {
+	buf *bytes.Buffer
+	info os.FileInfo
+}
+
+func (s SymLink) Name() string {
+	return s.info.Name()
+}
+
+func (s SymLink) Read(p []byte) (int, error) {
+	return s.buf.Read(p)
+}
+
+func (s SymLink) Close() error {
+	return nil
+}
+
+func (s SymLink) Stat() (info os.FileInfo, err error) {
+	return s.info, nil
+
+}
+
 
 // Archive project files according to the vgo project standard
 func archiveProject(writer io.Writer, sourcePath, module, version string, excludePathsRegExp *regexp.Regexp) error {
@@ -26,11 +57,29 @@ func archiveProject(writer io.Writer, sourcePath, module, version string, exclud
 			return nil
 		}
 		fileName := getFileName(sourcePath, path, module, version)
-		file, err := os.Open(path)
-		if err != nil {
-			return err
+
+		var file FileLike
+
+		if info.Mode()&os.ModeSymlink != 0 {
+			dst, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			i, err := os.Lstat(path)
+			if err != nil {
+				return err
+			}
+			file = SymLink{
+				buf: bytes.NewBufferString(dst),
+				info: i,
+			}
+		} else {
+			file, err = os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer file.Close()
 		}
-		defer file.Close()
 
 		zipFile, err := zipWriter.Create(fileName)
 		if err != nil {
